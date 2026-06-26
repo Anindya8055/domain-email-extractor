@@ -8,3 +8,6 @@ server/.env
 .env
 .env.*
 *.log
+server/results/
+server/logs/
+server/uploads/
