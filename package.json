@@ -1,0 +1,63 @@
+{
+  "name": "domain-email-extractor",
+  "version": "1.0.0",
+  "description": "Desktop app for extracting business emails from domain lists",
+  "author": "Talha Bin Saleh",
+  "private": true,
+  "main": "electron/main.cjs",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev:web": "concurrently \"npm run start --workspace server\" \"npm run dev --workspace client\"",
+    "build": "npm run build --workspace client",
+    "electron:dist": "npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.talha.domainemailextractor",
+    "productName": "Domain Email Extractor",
+    "files": [
+      "client/dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/playwright/**/*",
+      "**/node_modules/@playwright/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+electron/
+client/node_modules/
+client/dist/
+server/node_modules/
+server/.env
+.env
+.env.*
+*.log
