@@ -5,6 +5,9 @@
  */
 
 import fs from 'fs';
+import https from 'https';
+import http from 'http';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { extractEmailsFromHtml } from './emailExtractor.js';
 import { filterAndDeduplicateEmails } from '../utils/emailValidator.js';
 import { getRandomUserAgent } from './userAgents.js';
@@ -166,13 +169,59 @@ async function fetchHttp(url, timeout = 8000) {
   }
 }
 
-async function fetchPlaywright(browser, url, timeout = 10000) {
-  const ctx = await browser.newContext({
+async function fetchHttpWithProxy(url, timeout = 10000) {
+  const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
+  if (!proxyUrl) return null;
+  const agent = new HttpsProxyAgent(proxyUrl);
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const protocol = parsed.protocol === 'https:' ? https : http;
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: 'GET',
+      agent,
+      headers: {
+        'User-Agent': getRandomUserAgent(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+      },
+    };
+    const timer = setTimeout(() => { req.destroy(); reject(new Error('Proxy request timeout')); }, timeout);
+    const req = protocol.request(options, (res) => {
+      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) && res.headers.location) {
+        clearTimeout(timer);
+        fetchHttpWithProxy(res.headers.location, timeout).then(resolve).catch(reject);
+        return;
+      }
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => { clearTimeout(timer); resolve({ html: data, status: res.statusCode }); });
+    });
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.end();
+  });
+}
+
+async function fetchPlaywright(browser, url, timeout = 10000, proxyUrl = null) {
+  const ctxOptions = {
     userAgent: getRandomUserAgent(),
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
     extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
-  });
+  };
+  if (proxyUrl) {
+    const parsed = new URL(proxyUrl);
+    ctxOptions.proxy = {
+      server: `${parsed.protocol}//${parsed.host}`,
+      username: parsed.username || undefined,
+      password: parsed.password || undefined,
+    };
+  }
+  const ctx = await browser.newContext(ctxOptions);
   const page = await ctx.newPage();
   await page.route('**/*', (route) => {
     const type = route.request().resourceType();
@@ -652,21 +701,41 @@ async function httpCrawlWithInternals(domain, onLog) {
       pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
       return { emails: [...allEmails], wasReachable: true };
     }
+
+    // Blocked — retry with Webshare proxy if configured
+    const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
+    if (proxyUrl) {
+      onLog(`[${domain}] HTTP blocked — retrying with Webshare proxy...`);
+      try {
+        const rp = await fetchHttpWithProxy(base, 10000);
+        if (rp && !isBlockedResponse(rp.html, rp.status) && rp.html.length > 500) {
+          onLog(`[${domain}] ✅ HTTP proxy: bypassed block`);
+          extractEmailsFromHtml(rp.html).forEach(e => allEmails.add(e));
+          const urls = [...new Set([...discoverInternalLinks(rp.html, base), ...INTERNAL_PATHS.map(p => `${base}${p}`)])].slice(0, 6);
+          const pages = await Promise.allSettled(urls.map(u =>
+            fetchHttpWithProxy(u, 5000).then(x => x && !isBlockedResponse(x.html, x.status) ? x.html : null).catch(() => null)
+          ));
+          pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
+          return { emails: [...allEmails], wasReachable: true };
+        }
+      } catch (e) { onLog(`[${domain}] HTTP proxy error: ${e.message}`); }
+    }
+
     return { emails: [], wasReachable: false };
   } catch { return { emails: [], wasReachable: false }; }
 }
 
-async function playwrightCrawlWithInternals(domain, browser, onLog) {
+async function playwrightCrawlWithInternals(domain, browser, onLog, proxyUrl = null) {
   const base = `https://${domain}`;
   const allEmails = new Set();
   try {
-    const r = await fetchPlaywright(browser, base, 10000);
+    const r = await fetchPlaywright(browser, base, 10000, proxyUrl);
     if (!isBlockedResponse(r.html, r.status) && r.html.length > 500) {
       extractEmailsFromHtml(r.html).forEach(e => allEmails.add(e));
       (r.mailtoEmails || []).forEach(e => allEmails.add(e));
       const urls = [...new Set([...discoverInternalLinks(r.html, base), ...INTERNAL_PATHS.map(p => `${base}${p}`)])].slice(0, 3);
       const pages = await Promise.allSettled(urls.map(u =>
-        fetchPlaywright(browser, u, 6000).then(x => { (x.mailtoEmails || []).forEach(e => allEmails.add(e)); return !isBlockedResponse(x.html, x.status) ? x.html : null; }).catch(() => null)
+        fetchPlaywright(browser, u, 6000, proxyUrl).then(x => { (x.mailtoEmails || []).forEach(e => allEmails.add(e)); return !isBlockedResponse(x.html, x.status) ? x.html : null; }).catch(() => null)
       ));
       pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
       return { emails: [...allEmails], wasReachable: true };
@@ -774,8 +843,20 @@ async function _scrapeDomain(domain, browser, onLog) {
       const { emails: raw, wasReachable } = await playwrightCrawlWithInternals(domain, browser, onLog);
       const emails = filterAndDeduplicateEmails(raw);
       if (emails.length > 0) { onLog(`[${domain}] ✅ Playwright: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'PLAYWRIGHT', error: null }; }
-      if (wasReachable) onLog(`[${domain}] Playwright: reachable but no emails — continuing...`);
-      else onLog(`[${domain}] Playwright: unreachable or blocked — continuing...`);
+      if (wasReachable) {
+        onLog(`[${domain}] Playwright: reachable but no emails — continuing...`);
+      } else {
+        onLog(`[${domain}] Playwright: blocked — retrying with Webshare proxy...`);
+        const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
+        if (proxyUrl && budget.has(STEP_MIN_BUDGETS.PLAYWRIGHT)) {
+          try {
+            const { emails: proxyRaw, wasReachable: proxyReachable } = await playwrightCrawlWithInternals(domain, browser, onLog, proxyUrl);
+            const proxyEmails = filterAndDeduplicateEmails(proxyRaw);
+            if (proxyEmails.length > 0) { onLog(`[${domain}] ✅ Playwright+Proxy: ${proxyEmails.length} emails`); return { emails: proxyEmails, status: 'SUCCESS', method: 'PLAYWRIGHT_PROXY', error: null }; }
+            onLog(`[${domain}] Playwright+Proxy: ${proxyReachable ? 'no emails found' : 'still blocked'} — continuing...`);
+          } catch (e) { onLog(`[${domain}] Playwright+Proxy error: ${e.message}`); }
+        }
+      }
     } catch (e) { onLog(`[${domain}] Playwright error: ${e.message}`); }
   }
 

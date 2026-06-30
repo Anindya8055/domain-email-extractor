@@ -1,6 +1,6 @@
 // client/src/pages/Settings.jsx
 import React, { useEffect, useState } from 'react';
-import { Save, KeyRound, Globe, ShieldAlert, Bug } from 'lucide-react';
+import { Save, KeyRound, Globe, ShieldAlert, Bug, Shield } from 'lucide-react';
 import { getSettings, saveSettings, getSettingsDebug } from '../services/api.js';
 
 const fields = [
@@ -11,6 +11,7 @@ const fields = [
   { key: 'APOLLO_API_KEY', label: 'Apollo.io API Key', placeholder: 'Enter Apollo API key', icon: KeyRound },
   { key: 'SCRAPER_API_KEY', label: 'ScraperAPI Key', placeholder: 'Enter ScraperAPI key', icon: KeyRound },
   { key: 'SEARXNG_URL', label: 'SearXNG URL', placeholder: 'http://localhost:8080', icon: Globe },
+  { key: 'WEBSHARE_PROXY_URL', label: 'Webshare Proxy URL', placeholder: 'http://user:pass@p.webshare.io:80', icon: Shield },
 ];
 
 const EMPTY_FORM = {
@@ -21,6 +22,7 @@ const EMPTY_FORM = {
   APOLLO_API_KEY: '',
   SCRAPER_API_KEY: '',
   SEARXNG_URL: '',
+  WEBSHARE_PROXY_URL: '',
 };
 
 export default function Settings() {
@@ -124,7 +126,7 @@ export default function Settings() {
                     {label}
                   </label>
                   <input
-                    type={key.includes('URL') ? 'text' : 'password'}
+                    type={key.includes('URL') || key.includes('PROXY') ? 'text' : 'password'}
                     value={form[key]}
                     onChange={(e) => handleChange(key, e.target.value)}
                     placeholder={isSaved ? `Saved: ${masked}` : placeholder}

@@ -12,6 +12,7 @@ const MANAGED_KEYS = [
   'SCRAPER_API_KEY',
   'SEARXNG_URL',
   'APOLLO_API_KEY',
+  'WEBSHARE_PROXY_URL',
 ];
 
 export function setConfigPath(configPath) {
