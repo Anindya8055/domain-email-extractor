@@ -169,10 +169,36 @@ async function fetchHttp(url, timeout = 8000) {
   }
 }
 
-async function fetchHttpWithProxy(url, timeout = 10000) {
-  const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
-  if (!proxyUrl) return null;
-  const agent = new HttpsProxyAgent(proxyUrl);
+function getProxyUrls() {
+  const raw = getConfig('WEBSHARE_PROXY_URL');
+  if (!raw) return [];
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function getRandomProxy() {
+  const proxies = getProxyUrls();
+  if (!proxies.length) return null;
+  return proxies[Math.floor(Math.random() * proxies.length)];
+}
+
+const STEALTH_SCRIPT = `
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  window.chrome = { runtime: {} };
+  const origQuery = window.navigator.permissions?.query;
+  if (origQuery) {
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : origQuery(parameters);
+  }
+`;
+
+async function fetchHttpWithProxy(url, timeout = 10000, proxyUrl = null) {
+  const resolvedProxy = proxyUrl || getRandomProxy();
+  if (!resolvedProxy) return null;
+  const agent = new HttpsProxyAgent(resolvedProxy);
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const protocol = parsed.protocol === 'https:' ? https : http;
@@ -213,8 +239,9 @@ async function fetchPlaywright(browser, url, timeout = 10000, proxyUrl = null) {
     ignoreHTTPSErrors: true,
     extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
   };
-  if (proxyUrl) {
-    const parsed = new URL(proxyUrl);
+  const resolvedProxy = proxyUrl || null;
+  if (resolvedProxy) {
+    const parsed = new URL(resolvedProxy);
     ctxOptions.proxy = {
       server: `${parsed.protocol}//${parsed.host}`,
       username: parsed.username || undefined,
@@ -222,6 +249,7 @@ async function fetchPlaywright(browser, url, timeout = 10000, proxyUrl = null) {
     };
   }
   const ctx = await browser.newContext(ctxOptions);
+  await ctx.addInitScript(STEALTH_SCRIPT);
   const page = await ctx.newPage();
   await page.route('**/*', (route) => {
     const type = route.request().resourceType();
@@ -702,18 +730,18 @@ async function httpCrawlWithInternals(domain, onLog) {
       return { emails: [...allEmails], wasReachable: true };
     }
 
-    // Blocked — retry with Webshare proxy if configured
-    const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
+    // Blocked — retry with a random Webshare proxy if configured
+    const proxyUrl = getRandomProxy();
     if (proxyUrl) {
       onLog(`[${domain}] HTTP blocked — retrying with Webshare proxy...`);
       try {
-        const rp = await fetchHttpWithProxy(base, 10000);
+        const rp = await fetchHttpWithProxy(base, 10000, proxyUrl);
         if (rp && !isBlockedResponse(rp.html, rp.status) && rp.html.length > 500) {
           onLog(`[${domain}] ✅ HTTP proxy: bypassed block`);
           extractEmailsFromHtml(rp.html).forEach(e => allEmails.add(e));
           const urls = [...new Set([...discoverInternalLinks(rp.html, base), ...INTERNAL_PATHS.map(p => `${base}${p}`)])].slice(0, 6);
           const pages = await Promise.allSettled(urls.map(u =>
-            fetchHttpWithProxy(u, 5000).then(x => x && !isBlockedResponse(x.html, x.status) ? x.html : null).catch(() => null)
+            fetchHttpWithProxy(u, 5000, getRandomProxy()).then(x => x && !isBlockedResponse(x.html, x.status) ? x.html : null).catch(() => null)
           ));
           pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
           return { emails: [...allEmails], wasReachable: true };
@@ -847,7 +875,7 @@ async function _scrapeDomain(domain, browser, onLog) {
         onLog(`[${domain}] Playwright: reachable but no emails — continuing...`);
       } else {
         onLog(`[${domain}] Playwright: blocked — retrying with Webshare proxy...`);
-        const proxyUrl = getConfig('WEBSHARE_PROXY_URL');
+        const proxyUrl = getRandomProxy();
         if (proxyUrl && budget.has(STEP_MIN_BUDGETS.PLAYWRIGHT)) {
           try {
             const { emails: proxyRaw, wasReachable: proxyReachable } = await playwrightCrawlWithInternals(domain, browser, onLog, proxyUrl);
