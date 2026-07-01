@@ -34,7 +34,7 @@ const STEP_MIN_BUDGETS = {
   WAYBACK_MACHINE: 12000,
   BING_CACHE: 8000,
   PLAYWRIGHT: 15000,
-  SCRAPER_API: 25000,
+  SCRAPER_API: 20000,
   WHOIS: 8000,
   PATTERN_SMTP: 15000,
 };
@@ -308,7 +308,7 @@ async function fetchWithScraperAPI(url, domain, onLog) {
   try {
     const scraperUrl = `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(url)}&render=true`;
     onLog(`[${domain}] Sending to ScraperAPI...`);
-    const result = await fetchHttp(scraperUrl, 45000);
+    const result = await fetchHttp(scraperUrl, 20000);
     if (result.html && result.status === 200 && !isBlockedResponse(result.html, result.status) && result.html.length > 500) {
       onLog(`[${domain}] ✅ ScraperAPI success`);
       return result.html;
@@ -900,7 +900,7 @@ async function _scrapeDomain(domain, browser, onLog) {
         if (!budget.has(6000)) { onLog(`[${domain}] ScraperAPI sub-pages: stopping early — low remaining time`); break; }
         try {
           const u = `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(url)}&render=true`;
-          const r = await fetchHttp(u, 45000);
+          const r = await fetchHttp(u, 20000);
           if (r.html && r.status === 200 && !isBlockedResponse(r.html, r.status)) extractEmailsFromHtml(r.html).forEach(e => allEmails.add(e));
         } catch {}
       }
