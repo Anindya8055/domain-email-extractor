@@ -12,7 +12,8 @@
   "scripts": {
     "dev:web": "concurrently \"npm run start --workspace server\" \"npm run dev --workspace client\"",
     "build": "npm run build --workspace client",
-    "electron:dist": "npm run build && electron-builder --win nsis"
+    "electron:dist": "npm run build && electron-builder --win nsis",
+    "electron:dist:mac": "npm run build && electron-builder --mac dmg --x64"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
@@ -52,6 +53,17 @@
           ]
         }
       ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools"
     },
     "nsis": {
       "oneClick": false,

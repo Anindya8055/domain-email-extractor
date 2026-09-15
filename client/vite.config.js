@@ -10,11 +10,11 @@ export default defineConfig(({mode}) => ({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:4001',  // Updated: 4000 → 4001
+        target: 'http://127.0.0.1:4000',
         changeOrigin: true
       },
       '/results': {
-        target: 'http://127.0.0.1:4001',  // Updated: 4000 → 4001
+        target: 'http://127.0.0.1:4000',
         changeOrigin: true
       }
     }
