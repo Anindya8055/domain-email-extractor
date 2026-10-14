@@ -22,15 +22,6 @@ if (!fs.existsSync(RESULTS_DIR)) {
 
 const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_JOBS || '4', 10);
 
-function isPlaywrightBrowserAvailable() {
-  try {
-    const exePath = chromium.executablePath();
-    return Boolean(exePath && fs.existsSync(exePath));
-  } catch {
-    return false;
-  }
-}
-
 async function launchBrowser() {
   return chromium.launch({
     headless: true,
@@ -53,26 +44,17 @@ export async function processJob(jobId, domains) {
   let browser = null;
 
   try {
-    if (isPlaywrightBrowserAvailable()) {
-      try {
-        browser = await launchBrowser();
-        addJobLog(jobId, 'Playwright browser initialized.', 'info');
-      } catch (err) {
-        addJobLog(
-          jobId,
-          `Playwright launch failed — continuing without Playwright. ${err.message}`,
-          'warn'
-        );
-        logger.warn(`Job ${jobId}: Playwright launch failed: ${err.message}`);
-        browser = null;
-      }
-    } else {
+    try {
+      browser = await launchBrowser();
+      addJobLog(jobId, 'Playwright browser initialized.', 'info');
+    } catch (err) {
       addJobLog(
         jobId,
-        'Playwright browser not installed — continuing without Playwright.',
+        `Playwright unavailable — continuing without Playwright. ${err.message.split('\n')[0]}`,
         'warn'
       );
-      logger.warn(`Job ${jobId}: Playwright browser executable not found.`);
+      logger.warn(`Job ${jobId}: Playwright launch failed: ${err.message}`);
+      browser = null;
     }
 
     const limit = pLimit(MAX_CONCURRENT);

@@ -66,10 +66,16 @@ async function ensureBackend() {
   console.log('Starting backend from:', serverEntry);
   console.log('Using app config file:', appConfigPath);
 
+  // Builds made with PLAYWRIGHT_BROWSERS_PATH=0 ship Chromium inside playwright-core;
+  // otherwise Playwright falls back to the user's own browser cache.
+  const bundledBrowsers = path.join(serverRoot, 'node_modules', 'playwright-core', '.local-browsers');
+  const browserEnv = fs.existsSync(bundledBrowsers) ? { PLAYWRIGHT_BROWSERS_PATH: '0' } : {};
+
   backendProcess = spawn(process.execPath, [serverEntry], {
     cwd: serverRoot,
     env: {
       ...process.env,
+      ...browserEnv,
       PATH: process.env.PATH,
       PORT: String(API_PORT),
       APP_CONFIG_PATH: appConfigPath,

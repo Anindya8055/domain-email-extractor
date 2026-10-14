@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-mac:
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
@@ -16,14 +16,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Playwright Chromium (mac x64)
-        run: npx --workspace server playwright install chromium --with-deps
+      - name: Build client
+        run: npm run build
 
-      - name: Build client and package mac dmg
-        run: npm run electron:dist:mac
+      - name: Bundle server dependencies
+        run: npm run prepare:server
+
+      - name: Bundle Playwright Chromium inside the app
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: "0"
+        run: server/node_modules/.bin/playwright install chromium --only-shell
+
+      - name: Package dmg
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac dmg --x64
 
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
         with:
-          name: domain-email-extractor-mac
+          name: domain-email-extractor-mac-intel
           path: dist/*.dmg
