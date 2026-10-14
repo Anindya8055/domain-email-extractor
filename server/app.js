@@ -3,14 +3,12 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import uploadRoutes from './routes/upload.js';
 import jobRoutes from './routes/jobs.js';
 import settingsRoutes from './routes/settings.js';
 import { logger } from './utils/logger.js';
+import { RESULTS_DIR } from './utils/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.use(
@@ -38,7 +36,7 @@ app.use(
 );
 
 app.use(express.json({ limit: '1mb' }));
-app.use('/results', express.static(path.join(__dirname, 'results')));
+app.use('/results', express.static(RESULTS_DIR));
 
 const createLimiter = ({ windowMs, max, message, skip }) =>
   rateLimit({

@@ -1,7 +1,6 @@
 // server/controllers/jobController.js
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import {
   getJob,
   getAllJobs,
@@ -9,9 +8,7 @@ import {
   DomainStatus,
 } from '../services/jobStore.js';
 import { logger } from '../utils/logger.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RESULTS_DIR = path.join(__dirname, '../results');
+import { RESULTS_DIR } from '../utils/paths.js';
 
 /**
  * GET /api/jobs/:jobId

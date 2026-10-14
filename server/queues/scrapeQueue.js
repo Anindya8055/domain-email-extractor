@@ -2,8 +2,6 @@
 import pLimit from 'p-limit';
 import { chromium } from 'playwright';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { scrapeDomain } from '../scrapers/domainScraper.js';
 import {
   updateDomainResult,
@@ -15,9 +13,7 @@ import {
 } from '../services/jobStore.js';
 import { generateResultsExcel } from '../services/excelService.js';
 import { logger } from '../utils/logger.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RESULTS_DIR = path.join(__dirname, '../results');
+import { RESULTS_DIR } from '../utils/paths.js';
 
 // Ensure results directory exists
 if (!fs.existsSync(RESULTS_DIR)) {

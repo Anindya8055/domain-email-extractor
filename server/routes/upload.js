@@ -1,11 +1,8 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { handleUpload } from '../controllers/uploadController.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOAD_DIR = path.join(__dirname, '../uploads');
+import { UPLOAD_DIR } from '../utils/paths.js';
 
 // Ensure uploads dir exists
 import fs from 'fs';

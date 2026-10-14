@@ -73,6 +73,7 @@ async function ensureBackend() {
       PATH: process.env.PATH,
       PORT: String(API_PORT),
       APP_CONFIG_PATH: appConfigPath,
+      DATA_DIR: app.getPath('userData'),
       NODE_ENV: app.isPackaged ? 'production' : 'development',
       ELECTRON_RUN_AS_NODE: '1'
     },
