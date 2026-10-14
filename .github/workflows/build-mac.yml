@@ -32,6 +32,22 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac dmg --x64 --publish never
 
+      - name: Smoke test the packaged app
+        run: |
+          set -e
+          hdiutil attach dist/*.dmg -mountpoint /tmp/dee -nobrowse
+          APP="/tmp/dee/Domain Email Extractor.app"
+          RES="$APP/Contents/Resources"
+          file "$APP/Contents/MacOS/Domain Email Extractor"
+          ls "$RES/server/node_modules/playwright-core/.local-browsers"
+          ELECTRON_RUN_AS_NODE=1 PLAYWRIGHT_BROWSERS_PATH=0 PORT=4100 \
+            DATA_DIR=/tmp/dee-data APP_CONFIG_PATH=/tmp/dee-data/settings.json \
+            "$APP/Contents/MacOS/Domain Email Extractor" "$RES/server/index.js" &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4100/api/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:4100/api/health
+          cd "$RES/server" && ELECTRON_RUN_AS_NODE=1 PLAYWRIGHT_BROWSERS_PATH=0 \
+            "$APP/Contents/MacOS/Domain Email Extractor" -e "import('playwright').then(async p=>{const b=await p.chromium.launch({headless:true});const pg=await b.newPage();await pg.setContent('<p>ok</p>');console.log('chromium:',await pg.textContent('p'));await b.close()})"
+
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
         with:
