@@ -13,12 +13,12 @@ import { filterAndDeduplicateEmails } from '../utils/emailValidator.js';
 import { getRandomUserAgent } from './userAgents.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../configStore.js';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import net from 'net';
 import dns from 'dns/promises';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const DEEP_MODE_ENABLED = true;
 const DOMAIN_TOTAL_BUDGET_MS = 120000;
@@ -319,7 +319,7 @@ async function fetchWithScraperAPI(url, domain, onLog) {
 
 async function getWhoisEmails(domain) {
   try {
-    const { stdout } = await execAsync(`whois ${domain}`, { timeout: 8000 });
+    const { stdout } = await execFileAsync('whois', [domain], { timeout: 8000 });
     const emailRe = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}/g;
     const found = [...new Set((stdout.match(emailRe) || []).map(e => e.toLowerCase()))];
     return found.filter(e =>
@@ -655,11 +655,13 @@ async function commonCrawlSearch(domain, onLog) {
 
 // ─── SMTP ─────────────────────────────────────────────────────────────────────
 
+// Returns true (mailbox accepted), false (mailbox explicitly rejected) or null (no usable
+// answer: timeout, greylisting, or the server refused us because of IP reputation).
 async function smtpVerifyEmail(email, timeoutMs = 6000) {
   const domain = email.split('@')[1];
   try {
     const mxRecords = await dns.resolveMx(domain);
-    if (!mxRecords?.length) return false;
+    if (!mxRecords?.length) return null;
     mxRecords.sort((a, b) => a.priority - b.priority);
     const mxHost = mxRecords[0].exchange;
     return await new Promise((resolve) => {
@@ -667,23 +669,29 @@ async function smtpVerifyEmail(email, timeoutMs = 6000) {
       const done = (result) => {
         if (!resolved) { resolved = true; clearTimeout(timer); socket.destroy(); resolve(result); }
       };
-      const timer = setTimeout(() => done(false), timeoutMs);
+      const timer = setTimeout(() => done(null), timeoutMs);
       const socket = net.createConnection(25, mxHost);
       socket.on('data', (data) => {
         buffer += data.toString();
         const lines = buffer.split('\r\n'); buffer = lines.pop();
         for (const line of lines) {
-          if (stage === 0 && line.startsWith('220')) { socket.write('EHLO verify.local\r\n'); stage = 1; }
-          else if (stage === 1 && line.startsWith('250') && !line.startsWith('250-')) { socket.write('MAIL FROM:<verify@verify.local>\r\n'); stage = 2; }
-          else if (stage === 2 && line.startsWith('250')) { socket.write(`RCPT TO:<${email}>\r\n`); stage = 3; }
-          else if (stage === 3) { done(line.startsWith('250') || line.startsWith('251')); }
+          if (/^\d{3}-/.test(line)) continue;
+          if (stage === 0) { if (!line.startsWith('220')) return done(null); socket.write('EHLO mail-check.net\r\n'); stage = 1; }
+          else if (stage === 1) { if (!line.startsWith('250')) return done(null); socket.write('MAIL FROM:<>\r\n'); stage = 2; }
+          else if (stage === 2) { if (!line.startsWith('250')) return done(null); socket.write(`RCPT TO:<${email}>\r\n`); stage = 3; }
+          else if (stage === 3) {
+            if (line.startsWith('250') || line.startsWith('251')) return done(true);
+            const mailboxRejected = line.startsWith('5') && /5\.1\.[0-3]|user|mailbox|recipient|unknown|no such|does not exist|not found|invalid/i.test(line)
+              && !/block|spamhaus|reputation|policy|blacklist|listed/i.test(line);
+            return done(mailboxRejected ? false : null);
+          }
         }
       });
-      socket.on('error', () => done(false));
-      socket.on('timeout', () => done(false));
+      socket.on('error', () => done(null));
+      socket.on('timeout', () => done(null));
       socket.setTimeout(timeoutMs);
     });
-  } catch { return false; }
+  } catch { return null; }
 }
 
 async function emailPatternGuesser(domain, onLog, budget) {
@@ -694,9 +702,11 @@ async function emailPatternGuesser(domain, onLog, budget) {
       if (!mxRecords?.length) { onLog(`[${domain}] No MX — skipping pattern guesser`); return []; }
     } catch { onLog(`[${domain}] MX lookup failed — skipping pattern guesser`); return []; }
 
-    const fakeEmail = `xqz_nonexistent_9k2@${domain}`;
-    const isCatchAll = await smtpVerifyEmail(fakeEmail, 4000);
-    if (isCatchAll) { onLog(`[${domain}] Catch-all detected — skipping pattern guesser`); return []; }
+    const fakeEmail = `zq${Math.random().toString(36).slice(2, 10)}xv@${domain}`;
+    const probe = await smtpVerifyEmail(fakeEmail, 4000);
+    if (probe === true) { onLog(`[${domain}] Catch-all detected — skipping pattern guesser`); return []; }
+    // Without an explicit rejection of a made-up address, an "accepted" reply proves nothing.
+    if (probe === null) { onLog(`[${domain}] Mail server gave no clear answer — skipping pattern guesser`); return []; }
 
     const patterns = ['info', 'contact', 'hello', 'support', 'sales', 'admin', 'enquiries', 'office'];
     const verified = [];
@@ -789,7 +799,7 @@ async function _scrapeDomain(domain, browser, onLog) {
 
   {
     const { emails: raw, wasReachable } = await httpCrawlWithInternals(domain, onLog);
-    const emails = filterAndDeduplicateEmails(raw);
+    const emails = filterAndDeduplicateEmails(raw, domain);
     if (emails.length > 0) { onLog(`[${domain}] ✅ HTTP: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'HTTP', error: null }; }
     if (wasReachable) onLog(`[${domain}] HTTP: reachable but no emails — continuing...`);
     else onLog(`[${domain}] HTTP: unreachable or blocked — continuing...`);
@@ -797,26 +807,26 @@ async function _scrapeDomain(domain, browser, onLog) {
 
   if (getConfig('SERPER_API_KEY') && budget.require('GOOGLE_SERP', STEP_MIN_BUDGETS.GOOGLE_SERP)) {
     onLog(`[${domain}] Trying Google SERP...`);
-    const serpEmails = filterAndDeduplicateEmails(await googleSerpEmailSearch(domain, onLog));
+    const serpEmails = filterAndDeduplicateEmails(await googleSerpEmailSearch(domain, onLog), domain);
     if (serpEmails.length > 0) { onLog(`[${domain}] ✅ Google SERP: ${serpEmails.length} emails`); return { emails: serpEmails, status: 'SUCCESS', method: 'GOOGLE_SERP', error: null }; }
     onLog(`[${domain}] Google SERP completed with no emails`);
   }
 
   if (getConfig('SNOV_CLIENT_ID') && getConfig('SNOV_CLIENT_SECRET') && budget.require('SNOV_IO', STEP_MIN_BUDGETS.SNOV_IO)) {
     onLog(`[${domain}] Trying Snov.io...`);
-    const snovEmails = filterAndDeduplicateEmails(await snovDomainSearch(domain, onLog));
+    const snovEmails = filterAndDeduplicateEmails(await snovDomainSearch(domain, onLog), domain);
     if (snovEmails.length > 0) { onLog(`[${domain}] ✅ Snov.io: ${snovEmails.length} emails`); return { emails: snovEmails, status: 'SUCCESS', method: 'SNOV_IO', error: null }; }
   }
 
   if (getConfig('MINELEAD_API_KEY') && budget.require('MINELEAD', STEP_MIN_BUDGETS.MINELEAD)) {
     onLog(`[${domain}] Trying Minelead...`);
-    const mlEmails = filterAndDeduplicateEmails(await mineleadDomainSearch(domain, onLog));
+    const mlEmails = filterAndDeduplicateEmails(await mineleadDomainSearch(domain, onLog), domain);
     if (mlEmails.length > 0) { onLog(`[${domain}] ✅ Minelead: ${mlEmails.length} emails`); return { emails: mlEmails, status: 'SUCCESS', method: 'MINELEAD', error: null }; }
   }
 
   if (getConfig('APOLLO_API_KEY') && budget.require('APOLLO', STEP_MIN_BUDGETS.APOLLO)) {
     onLog(`[${domain}] Trying Apollo...`);
-    const apolloEmails = filterAndDeduplicateEmails(await apolloDomainSearch(domain, onLog));
+    const apolloEmails = filterAndDeduplicateEmails(await apolloDomainSearch(domain, onLog), domain);
     if (apolloEmails.length > 0) { onLog(`[${domain}] ✅ Apollo: ${apolloEmails.length} emails`); return { emails: apolloEmails, status: 'SUCCESS', method: 'APOLLO', error: null }; }
   }
 
@@ -827,7 +837,7 @@ async function _scrapeDomain(domain, browser, onLog) {
 
   if (budget.require('COMMON_CRAWL', STEP_MIN_BUDGETS.COMMON_CRAWL)) {
     onLog(`[${domain}] Trying Common Crawl...`);
-    const ccEmails = filterAndDeduplicateEmails(await commonCrawlSearch(domain, onLog));
+    const ccEmails = filterAndDeduplicateEmails(await commonCrawlSearch(domain, onLog), domain);
     if (ccEmails.length > 0) { onLog(`[${domain}] ✅ Common Crawl: ${ccEmails.length} emails`); return { emails: ccEmails, status: 'SUCCESS', method: 'COMMON_CRAWL', error: null }; }
   }
 
@@ -840,7 +850,7 @@ async function _scrapeDomain(domain, browser, onLog) {
       const links = [...new Set([...discoverInternalLinks(waybackHtml, base), ...INTERNAL_PATHS.map(p => `${base}${p}`)])].slice(0, 4);
       const pages = await Promise.allSettled(links.map(u => fetchHttp(u, 4000).then(r => !isBlockedResponse(r.html, r.status) ? r.html : null).catch(() => null)));
       pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
-      const emails = filterAndDeduplicateEmails([...allEmails]);
+      const emails = filterAndDeduplicateEmails([...allEmails], domain);
       if (emails.length > 0) { onLog(`[${domain}] ✅ Wayback: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'WAYBACK_MACHINE', error: null }; }
     }
     onLog(`[${domain}] Wayback: no emails found`);
@@ -855,7 +865,7 @@ async function _scrapeDomain(domain, browser, onLog) {
       const links = [...new Set([...discoverInternalLinks(bingHtml, base), ...INTERNAL_PATHS.map(p => `${base}${p}`)])].slice(0, 4);
       const pages = await Promise.allSettled(links.map(u => fetchHttp(u, 4000).then(r => !isBlockedResponse(r.html, r.status) ? r.html : null).catch(() => null)));
       pages.forEach(p => p.status === 'fulfilled' && p.value && extractEmailsFromHtml(p.value).forEach(e => allEmails.add(e)));
-      const emails = filterAndDeduplicateEmails([...allEmails]);
+      const emails = filterAndDeduplicateEmails([...allEmails], domain);
       if (emails.length > 0) { onLog(`[${domain}] ✅ Bing Cache: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'BING_CACHE', error: null }; }
     }
     onLog(`[${domain}] Bing Cache: no emails found`);
@@ -869,7 +879,7 @@ async function _scrapeDomain(domain, browser, onLog) {
     onLog(`[${domain}] Trying Playwright...`);
     try {
       const { emails: raw, wasReachable } = await playwrightCrawlWithInternals(domain, browser, onLog);
-      const emails = filterAndDeduplicateEmails(raw);
+      const emails = filterAndDeduplicateEmails(raw, domain);
       if (emails.length > 0) { onLog(`[${domain}] ✅ Playwright: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'PLAYWRIGHT', error: null }; }
       if (wasReachable) {
         onLog(`[${domain}] Playwright: reachable but no emails — continuing...`);
@@ -879,7 +889,7 @@ async function _scrapeDomain(domain, browser, onLog) {
         if (proxyUrl && budget.has(STEP_MIN_BUDGETS.PLAYWRIGHT)) {
           try {
             const { emails: proxyRaw, wasReachable: proxyReachable } = await playwrightCrawlWithInternals(domain, browser, onLog, proxyUrl);
-            const proxyEmails = filterAndDeduplicateEmails(proxyRaw);
+            const proxyEmails = filterAndDeduplicateEmails(proxyRaw, domain);
             if (proxyEmails.length > 0) { onLog(`[${domain}] ✅ Playwright+Proxy: ${proxyEmails.length} emails`); return { emails: proxyEmails, status: 'SUCCESS', method: 'PLAYWRIGHT_PROXY', error: null }; }
             onLog(`[${domain}] Playwright+Proxy: ${proxyReachable ? 'no emails found' : 'still blocked'} — continuing...`);
           } catch (e) { onLog(`[${domain}] Playwright+Proxy error: ${e.message}`); }
@@ -904,7 +914,7 @@ async function _scrapeDomain(domain, browser, onLog) {
           if (r.html && r.status === 200 && !isBlockedResponse(r.html, r.status)) extractEmailsFromHtml(r.html).forEach(e => allEmails.add(e));
         } catch {}
       }
-      const emails = filterAndDeduplicateEmails([...allEmails]);
+      const emails = filterAndDeduplicateEmails([...allEmails], domain);
       if (emails.length > 0) { onLog(`[${domain}] ✅ ScraperAPI: ${emails.length} emails`); return { emails, status: 'SUCCESS', method: 'SCRAPER_API', error: null }; }
     }
     onLog(`[${domain}] ScraperAPI: no emails found`);
@@ -912,7 +922,7 @@ async function _scrapeDomain(domain, browser, onLog) {
 
   if (budget.require('WHOIS', STEP_MIN_BUDGETS.WHOIS)) {
     onLog(`[${domain}] Trying WHOIS...`);
-    const whoisEmails = filterAndDeduplicateEmails(await getWhoisEmails(domain));
+    const whoisEmails = filterAndDeduplicateEmails(await getWhoisEmails(domain), domain);
     if (whoisEmails.length > 0) { onLog(`[${domain}] ✅ WHOIS: ${whoisEmails.length} emails`); return { emails: whoisEmails, status: 'SUCCESS', method: 'WHOIS', error: null }; }
     onLog(`[${domain}] WHOIS: no emails found`);
   }
@@ -920,7 +930,7 @@ async function _scrapeDomain(domain, browser, onLog) {
   if (budget.require('PATTERN_SMTP', STEP_MIN_BUDGETS.PATTERN_SMTP)) {
     onLog(`[${domain}] Trying SMTP pattern guesser...`);
     const guessedEmails = await emailPatternGuesser(domain, onLog, budget);
-    const validated = filterAndDeduplicateEmails(guessedEmails);
+    const validated = filterAndDeduplicateEmails(guessedEmails, domain);
     if (validated.length > 0) { onLog(`[${domain}] ✅ Pattern (SMTP verified): ${validated.length} emails`); return { emails: validated, status: 'SUCCESS', method: 'PATTERN_SMTP', error: null }; }
     onLog(`[${domain}] SMTP pattern: no emails verified`);
   }

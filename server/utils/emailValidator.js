@@ -3,12 +3,43 @@ const FAKE_DOMAINS = new Set([
   'yourdomain.com','domain.com','yoursite.com','placeholder.com',
   'fake.com','dummy.com','acme.com','foo.com','bar.com','baz.com',
   'lorem.com','noreply.com','sentry.io','email.com','user.com',
+  'company.com','yourcompany.com','mycompany.com','companyname.com',
+  'website.com','yourwebsite.com','mysite.com','vandelayindustries.com',
 ]);
 
 const FAKE_LOCAL_PARTS = new Set([
   'noreply','no-reply','donotreply','do-not-reply',
   'example','test','user','youremail','your-email',
+  'you','yourname','your.name','name','filler','firstname','lastname',
+  'first.last','firstname.lastname','email','sample',
 ]);
+
+// john.doe / jane_doe / jhon.doea and similar template names
+const PLACEHOLDER_PERSON = /^(j[oh]{1,2}n|jane|jhon)[._-]?doe/;
+
+const FREE_MAIL_DOMAINS = new Set([
+  'gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','live.com',
+  'msn.com','icloud.com','me.com','aol.com','proton.me','protonmail.com','zoho.com',
+]);
+
+// "dept.uni.edu" → "uni.edu"; "shop.example.co.uk" → "example.co.uk"
+function baseDomain(host) {
+  const parts = host.split('.');
+  const secondLevel = parts[parts.length - 2];
+  const tld = parts[parts.length - 1];
+  const takeThree = tld.length === 2 && /^(co|com|org|net|ac|gov|edu)$/.test(secondLevel);
+  return parts.slice(takeThree ? -3 : -2).join('.');
+}
+
+// An email belongs to the target when both share the same base domain (so
+// subdomains like austin.utexas.edu count for healthcomm.utexas.edu). Free-mail
+// addresses are allowed because small businesses often publish them. Anything
+// else is a registrar, privacy service, vendor or embedded third-party address.
+export function belongsToDomain(email, targetDomain) {
+  const emailDomain = email.slice(email.lastIndexOf('@') + 1).toLowerCase();
+  const target = targetDomain.toLowerCase().replace(/^www\./, '');
+  return baseDomain(emailDomain) === baseDomain(target) || FREE_MAIL_DOMAINS.has(emailDomain);
+}
 
 // Unicode/entity prefixes that appear before real emails in HTML
 const BAD_PREFIXES = [
@@ -64,6 +95,7 @@ export function isValidEmail(email) {
 
   if (FAKE_DOMAINS.has(domain)) return false;
   if (FAKE_LOCAL_PARTS.has(local)) return false;
+  if (PLACEHOLDER_PERSON.test(local)) return false;
 
   // Must match basic email shape
   if (!/^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,6}$/.test(e)) return false;
@@ -71,12 +103,12 @@ export function isValidEmail(email) {
   return true;
 }
 
-export function filterAndDeduplicateEmails(rawEmails) {
+export function filterAndDeduplicateEmails(rawEmails, targetDomain = null) {
   const seen  = new Set();
   const valid = [];
   for (const raw of rawEmails) {
     const n = raw.trim().toLowerCase();
-    if (!seen.has(n) && isValidEmail(n)) {
+    if (!seen.has(n) && isValidEmail(n) && (!targetDomain || belongsToDomain(n, targetDomain))) {
       seen.add(n);
       valid.push(n);
     }

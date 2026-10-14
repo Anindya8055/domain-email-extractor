@@ -115,18 +115,10 @@ export function decodeCloudflareEmails(html) {
  */
 export function extractEmailsByAtScan(html) {
   if (!html) return [];
-  const emails = new Set();
   const decoded = decodeHtmlEntities(html);
-
-  for (let i = 0; i < decoded.length; i++) {
-    if (decoded[i] !== '@') continue;
-    const start  = Math.max(0, i - 60);
-    const end    = Math.min(decoded.length, i + 60);
-    const window = decoded.slice(start, end);
-    const matches = window.match(STRICT_EMAIL_REGEX) || [];
-    matches.forEach(e => emails.add(e.toLowerCase().trim()));
-  }
-
+  // Match against the full text: slicing fixed windows around each '@' cut neighbouring emails in half.
+  const matches = decoded.match(new RegExp(STRICT_EMAIL_REGEX.source, 'g')) || [];
+  const emails = new Set(matches.map(e => e.toLowerCase().trim()));
   return Array.from(emails).filter(e => !isFalsePositive(e));
 }
 
