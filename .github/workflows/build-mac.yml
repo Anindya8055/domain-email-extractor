@@ -40,10 +40,35 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: "0"
         run: server/node_modules/.bin/playwright install chromium --only-shell
 
-      - name: Package dmg
+      - name: Package app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
+        run: npx electron-builder --mac dir --${{ matrix.arch }} --publish never
+
+      # electron-builder edits the Electron bundle, which breaks Electron's own signature.
+      # Apple Silicon refuses broken signatures (macOS reports it as malware), so re-sign
+      # ad hoc: inner executables first, then the app bundle.
+      - name: Ad-hoc sign app
+        run: |
+          set -e
+          APP=$(ls -d dist/mac*/"Domain Email Extractor.app")
+          echo "Signature before re-signing:"
+          codesign --verify --deep --strict "$APP" && echo "valid" || echo "INVALID (expected)"
+          find "$APP/Contents/Resources" -type f | while read -r f; do
+            if file "$f" | grep -q "Mach-O"; then codesign --force --sign - "$f"; fi
+          done
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Create dmg
+        run: |
+          set -e
+          APP=$(ls -d dist/mac*/"Domain Email Extractor.app")
+          mkdir -p dmg-staging
+          cp -R "$APP" dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "Domain Email Extractor" -srcfolder dmg-staging -ov -format UDZO \
+            "dist/Domain-Email-Extractor-mac-${{ matrix.name }}.dmg"
 
       - name: Smoke test the packaged app
         run: |
@@ -51,6 +76,7 @@ jobs:
           hdiutil attach dist/*.dmg -mountpoint /tmp/dee -nobrowse
           APP="/tmp/dee/Domain Email Extractor.app"
           RES="$APP/Contents/Resources"
+          codesign --verify --deep --strict "$APP"
           file "$APP/Contents/MacOS/Domain Email Extractor" | tee /dev/stderr | grep -q "${{ matrix.binary_arch }}"
           SHELL_BIN=$(find "$RES/server/node_modules/playwright-core/.local-browsers" -name chrome-headless-shell -type f | head -1)
           file "$SHELL_BIN" | tee /dev/stderr | grep -q "${{ matrix.binary_arch }}"
