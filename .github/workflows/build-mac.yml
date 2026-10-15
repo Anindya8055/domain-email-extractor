@@ -1,11 +1,24 @@
-name: Build macOS (Intel) app
+name: Build macOS apps
 
 on:
   workflow_dispatch: {}
 
 jobs:
   build-mac:
-    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: intel
+            runner: macos-15-intel
+            arch: x64
+            binary_arch: x86_64
+          - name: apple-silicon
+            runner: macos-15
+            arch: arm64
+            binary_arch: arm64
+    name: build-mac (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +43,7 @@ jobs:
       - name: Package dmg
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --mac dmg --x64 --publish never
+        run: npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
 
       - name: Smoke test the packaged app
         run: |
@@ -38,8 +51,9 @@ jobs:
           hdiutil attach dist/*.dmg -mountpoint /tmp/dee -nobrowse
           APP="/tmp/dee/Domain Email Extractor.app"
           RES="$APP/Contents/Resources"
-          file "$APP/Contents/MacOS/Domain Email Extractor"
-          ls "$RES/server/node_modules/playwright-core/.local-browsers"
+          file "$APP/Contents/MacOS/Domain Email Extractor" | tee /dev/stderr | grep -q "${{ matrix.binary_arch }}"
+          SHELL_BIN=$(find "$RES/server/node_modules/playwright-core/.local-browsers" -name chrome-headless-shell -type f | head -1)
+          file "$SHELL_BIN" | tee /dev/stderr | grep -q "${{ matrix.binary_arch }}"
           ELECTRON_RUN_AS_NODE=1 PLAYWRIGHT_BROWSERS_PATH=0 PORT=4100 \
             DATA_DIR=/tmp/dee-data APP_CONFIG_PATH=/tmp/dee-data/settings.json \
             "$APP/Contents/MacOS/Domain Email Extractor" "$RES/server/index.js" &
@@ -51,5 +65,5 @@ jobs:
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
         with:
-          name: domain-email-extractor-mac-intel
+          name: domain-email-extractor-mac-${{ matrix.name }}
           path: dist/*.dmg

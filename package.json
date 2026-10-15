@@ -15,7 +15,8 @@
     "electron:dist": "npm run build && npm run prepare:server && electron-builder --win nsis",
     "electron:dist:mac": "npm run build && npm run prepare:server && electron-builder --mac dmg --x64",
     "prepare:server": "cd server && npm install --omit=dev --workspaces=false --no-package-lock",
-    "electron:dist:linux": "npm run build && npm run prepare:server && electron-builder --linux AppImage --x64"
+    "electron:dist:linux": "npm run build && npm run prepare:server && electron-builder --linux AppImage --x64",
+    "electron:dist:mac:arm64": "npm run build && npm run prepare:server && electron-builder --mac dmg --arm64"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
@@ -72,7 +73,8 @@
         {
           "target": "dmg",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ],
